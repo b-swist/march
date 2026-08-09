@@ -1,0 +1,9 @@
+BasedOnStyle: LLVM
+UseTab: AlignWithSpaces
+ColumnLimit: 0
+IndentWidth: 4
+TabWidth: 4
+BreakBeforeBraces: Linux
+AllowShortIfStatementsOnASingleLine: WithoutElse
+IndentCaseLabels: false
+AllowShortBlocksOnASingleLine: Empty
