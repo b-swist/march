@@ -1,11 +1,6 @@
-<!--
-SPDX-FileCopyrightText: © 2026 Isaac Freund
-SPDX-License-Identifier: 0BSD
--->
+# March
 
-# tinyrwm.c
-
-Tiny river window manager implemented in C.
+River window manager configured in [Lua].
 
 ## Dependencies
 
@@ -29,5 +24,7 @@ ninja -C build
 ## Running
 
 ```
-river -c ./build/tinyrwm
+river -c ./build/march
 ```
+
+[Lua]: https://www.lua.org
