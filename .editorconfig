@@ -8,10 +8,6 @@ trim_final_whitespace = true
 [*.{h,c}]
 indent_style = tab
 
-[*.nix]
+[*.nix,meson.build]
 indent_style = space
 indent_size = 2
-
-[meson.build]
-indent_style = space
-indent_size = 4
