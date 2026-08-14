@@ -6,19 +6,25 @@
   };
 
   outputs = {nixpkgs, ...}: let
-    system = "x86_64-linux";
-    pkgs = import nixpkgs {inherit system;};
+    systems = ["x86_64-linux" "arrch64-linux"];
+    forAllSystems = nixpkgs.lib.genAttrs systems;
   in {
-    devShells.${system}.default = pkgs.mkShell {
-      packages = with pkgs; [
-        pkg-config
-        meson
-        ninja
-        wayland
-        wayland-scanner
-        libxkbcommon
-        river
-      ];
-    };
+    devShells = forAllSystems (
+      system: let
+        pkgs = nixpkgs.legacyPackages.${system};
+      in {
+        default = pkgs.mkShell {
+          packages = with pkgs; [
+            pkg-config
+            meson
+            ninja
+            wayland
+            wayland-scanner
+            libxkbcommon
+            river
+          ];
+        };
+      }
+    );
   };
 }
