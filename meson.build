@@ -27,6 +27,7 @@ generated = wl_mod.scan_xml(
 
 sources = [
   'march.c',
+  'config.c',
 ]
 
 exe = executable(

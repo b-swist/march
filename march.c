@@ -15,88 +15,10 @@
 #include <xkbcommon/xkbcommon-keysyms.h>
 #include <xkbcommon/xkbcommon.h>
 
-typedef struct Seat Seat;
+#include "config.h"
+#include "march.h"
 
-typedef struct {
-	struct river_output_v1 *obj;
-	bool removed;
-	struct wl_list link; // WindowManager.outputs
-} Output;
-
-typedef struct {
-	struct river_window_v1 *obj;
-	struct river_node_v1 *node;
-
-	bool new;
-	bool closed;
-
-	int32_t x;
-	int32_t y;
-	int32_t width;
-	int32_t height;
-
-	Seat *pointer_move_requested;
-	Seat *pointer_resize_requested;
-	uint32_t pointer_resize_requested_edges;
-
-	struct wl_list link; // WindowManager.windows
-} Window;
-
-enum Action {
-	ACTION_NONE,
-	ACTION_SPAWN_FOOT,
-	ACTION_CLOSE,
-	ACTION_FOCUS_NEXT,
-	ACTION_MOVE,
-	ACTION_RESIZE,
-	ACTION_EXIT,
-};
-
-typedef struct {
-	struct river_xkb_binding_v1 *obj;
-	Seat *seat;
-	enum Action action;
-	struct wl_list link;
-} XkbBinding;
-
-typedef struct {
-	struct river_pointer_binding_v1 *obj;
-	Seat *seat;
-	enum Action action;
-	struct wl_list link;
-} PointerBinding;
-
-enum SeatOp {
-	SEAT_OP_NONE,
-	SEAT_OP_MOVE,
-	SEAT_OP_RESIZE,
-};
-
-struct Seat {
-	struct river_seat_v1 *obj;
-	bool new;
-	bool removed;
-
-	Window *focused;
-	Window *hovered;
-	Window *interacted;
-
-	struct wl_list xkb_bindings;     // XkbBinding
-	struct wl_list pointer_bindings; // PointerBinding
-	enum Action pending_action;
-
-	enum SeatOp op;
-	// For SEAT_OP_MOVE and SEAT_OP_RESIZE
-	Window *op_window;
-	int32_t op_start_x, op_start_y;
-	int32_t op_dx, op_dy;
-	bool op_release;
-	// For SEAT_OP_RESIZE only
-	int32_t op_start_width, op_start_height;
-	uint32_t op_edges;
-
-	struct wl_list link; // WindowManager.seats
-};
+struct Bindings binds;
 
 struct WindowManager {
 	struct wl_list outputs; // Output
@@ -245,8 +167,7 @@ static void window_manage(Window *window)
 		window->pointer_move_requested = NULL;
 	}
 	if (window->pointer_resize_requested != NULL) {
-		seat_pointer_resize(window->pointer_resize_requested, window,
-		                    window->pointer_resize_requested_edges);
+		seat_pointer_resize(window->pointer_resize_requested, window, window->pointer_resize_requested_edges);
 		window->pointer_resize_requested = NULL;
 	}
 }
@@ -271,7 +192,7 @@ static void xkb_binding_destroy(XkbBinding *binding)
 	free(binding);
 }
 
-static void xkb_binding_create(Seat *seat, uint32_t mods, xkb_keysym_t keysym, enum Action action)
+void xkb_binding_create(Seat *seat, uint32_t mods, xkb_keysym_t keysym, march_action action)
 {
 	XkbBinding *binding = calloc(1, sizeof(XkbBinding));
 	binding->obj = river_xkb_bindings_v1_get_xkb_binding(xkb_bindings_v1, seat->obj, keysym, mods);
@@ -304,7 +225,7 @@ static void pointer_binding_destroy(PointerBinding *binding)
 	free(binding);
 }
 
-static void pointer_binding_create(Seat *seat, uint32_t mods, uint32_t button, enum Action action)
+void pointer_binding_create(Seat *seat, uint32_t mods, uint32_t button, march_action action)
 {
 	PointerBinding *binding = calloc(1, sizeof(PointerBinding));
 	binding->obj = river_seat_v1_get_pointer_binding(seat->obj, button, mods);
@@ -335,8 +256,7 @@ static void seat_handle_pointer_leave(void *data, struct river_seat_v1 *obj)
 	seat->hovered = NULL;
 }
 
-static void
-seat_handle_window_interaction(void *data, struct river_seat_v1 *obj, struct river_window_v1 *river_window)
+static void seat_handle_window_interaction(void *data, struct river_seat_v1 *obj, struct river_window_v1 *river_window)
 {
 	Seat *seat = data;
 	seat->interacted = river_window_v1_get_user_data(river_window);
@@ -379,16 +299,10 @@ static void seat_maybe_destroy(Seat *seat)
 	}
 
 	XkbBinding *xkb_binding, *xkb_binding_tmp;
-	wl_list_for_each_safe(xkb_binding, xkb_binding_tmp, &seat->xkb_bindings, link)
-	{
-		xkb_binding_destroy(xkb_binding);
-	}
+	wl_list_for_each_safe(xkb_binding, xkb_binding_tmp, &seat->xkb_bindings, link) { xkb_binding_destroy(xkb_binding); }
 
 	PointerBinding *pointer_binding, *pointer_binding_tmp;
-	wl_list_for_each_safe(pointer_binding, pointer_binding_tmp, &seat->pointer_bindings, link)
-	{
-		pointer_binding_destroy(pointer_binding);
-	}
+	wl_list_for_each_safe(pointer_binding, pointer_binding_tmp, &seat->pointer_bindings, link) { pointer_binding_destroy(pointer_binding); }
 
 	river_seat_v1_destroy(seat->obj);
 	wl_list_remove(&seat->link);
@@ -446,55 +360,16 @@ static void seat_pointer_resize(Seat *seat, Window *window, uint32_t edges)
 	seat->op_dy = 0;
 }
 
-static void seat_action(Seat *seat, enum Action action)
-{
-	switch (action) {
-	case ACTION_NONE:
-		break;
-	case ACTION_SPAWN_FOOT:
-		if (fork() == 0) {
-			execlp("foot", "foot", (char *)0);
-		}
-		break;
-	case ACTION_CLOSE:
-		if (seat->focused != NULL) {
-			river_window_v1_close(seat->focused->obj);
-		}
-		break;
-	case ACTION_FOCUS_NEXT:
-		if (!wl_list_empty(&wm.windows)) {
-			// Focus the bottom window
-			Window *window = wl_container_of(wm.windows.next, window, link);
-			seat_focus(seat, window);
-		}
-		break;
-	case ACTION_MOVE:
-		if (seat->op == SEAT_OP_NONE && seat->hovered != NULL) {
-			seat_pointer_move(seat, seat->hovered);
-		}
-		break;
-	case ACTION_RESIZE:
-		if (seat->op == SEAT_OP_NONE && seat->hovered != NULL) {
-			seat_pointer_resize(seat, seat->hovered, RIVER_WINDOW_V1_EDGES_BOTTOM | RIVER_WINDOW_V1_EDGES_RIGHT);
-		}
-		break;
-	case ACTION_EXIT:
-		river_window_manager_v1_exit_session(window_manager_v1);
-		break;
-	}
-}
-
 static void seat_manage(Seat *seat)
 {
 	if (seat->new) {
 		seat->new = false;
-		const uint32_t super = RIVER_SEAT_V1_MODIFIERS_MOD4;
-		xkb_binding_create(seat, super, XKB_KEY_space, ACTION_SPAWN_FOOT);
-		xkb_binding_create(seat, super, XKB_KEY_q, ACTION_CLOSE);
-		xkb_binding_create(seat, super, XKB_KEY_n, ACTION_FOCUS_NEXT);
-		xkb_binding_create(seat, super, XKB_KEY_Escape, ACTION_EXIT);
-		pointer_binding_create(seat, super, BTN_LEFT, ACTION_MOVE);
-		pointer_binding_create(seat, super, BTN_RIGHT, ACTION_RESIZE);
+
+		ConfigKeyBinding *kb;
+		wl_list_for_each(kb, &binds.config_key_bindings, link) { xkb_binding_create(seat, kb->mods, kb->keysym, kb->action); }
+
+		ConfigButtonBinding *bb;
+		wl_list_for_each(bb, &binds.config_button_bindings, link) { pointer_binding_create(seat, bb->mods, bb->button, bb->action); }
 	}
 
 	// If no window was interacted with in the current manage sequence,
@@ -503,8 +378,10 @@ static void seat_manage(Seat *seat)
 	seat_focus(seat, seat->interacted);
 	seat->interacted = NULL;
 
-	seat_action(seat, seat->pending_action);
-	seat->pending_action = ACTION_NONE;
+	if (seat->pending_action != NULL) {
+		seat->pending_action(seat);
+		seat->pending_action = NULL;
+	}
 
 	switch (seat->op) {
 	case SEAT_OP_NONE:
@@ -552,8 +429,7 @@ static void seat_render(Seat *seat)
 	case SEAT_OP_NONE:
 		break;
 	case SEAT_OP_MOVE:
-		window_set_position(seat->op_window, seat->op_start_x + seat->op_dx,
-		                    seat->op_start_y + seat->op_dy);
+		window_set_position(seat->op_window, seat->op_start_x + seat->op_dx, seat->op_start_y + seat->op_dy);
 		break;
 	case SEAT_OP_RESIZE:;
 		int32_t x = seat->op_start_x;
@@ -569,35 +445,70 @@ static void seat_render(Seat *seat)
 	}
 }
 
+void action_close(Seat *seat)
+{
+	if (seat->focused != NULL) {
+		river_window_v1_close(seat->focused->obj);
+	}
+}
+
+void action_focus_next(Seat *seat)
+{
+	if (!wl_list_empty(&wm.windows)) {
+		// Focus the bottom window
+		Window *window = wl_container_of(wm.windows.next, window, link);
+		seat_focus(seat, window);
+	}
+}
+
+void action_spawn_foot(Seat *seat)
+{
+	pid_t pid = fork();
+	if (pid == 0) {
+		execlp("foot", "foot", (char *)0);
+		perror("execlp failed");
+	}
+}
+
+void action_move(Seat *seat)
+{
+	if (seat->op == SEAT_OP_NONE && seat->hovered != NULL) {
+		seat_pointer_move(seat, seat->hovered);
+	}
+}
+
+void action_resize(Seat *seat)
+{
+	if (seat->op == SEAT_OP_NONE && seat->hovered != NULL) {
+		seat_pointer_resize(seat, seat->hovered, RIVER_WINDOW_V1_EDGES_BOTTOM | RIVER_WINDOW_V1_EDGES_RIGHT);
+	}
+}
+
+void action_exit(Seat *seat)
+{
+	river_window_manager_v1_exit_session(window_manager_v1);
+}
+
 static void window_manager_handle_unavailable(void *data, struct river_window_manager_v1 *obj)
 {
 	fputs("error: another window manager is already running", stderr);
-	exit(1);
+	exit(EXIT_FAILURE);
 }
 
 static void window_manager_handle_finished(void *data, struct river_window_manager_v1 *obj)
 {
-	exit(0);
+	exit(EXIT_SUCCESS);
 }
 
 static void window_manager_handle_manage_start(void *data, struct river_window_manager_v1 *obj)
 {
 	// Destroy closed windows and removed outputs/seats
 	Output *output, *output_tmp;
-	wl_list_for_each_safe(output, output_tmp, &wm.outputs, link)
-	{
-		output_maybe_destroy(output);
-	}
+	wl_list_for_each_safe(output, output_tmp, &wm.outputs, link) { output_maybe_destroy(output); }
 	Window *window, *window_tmp;
-	wl_list_for_each_safe(window, window_tmp, &wm.windows, link)
-	{
-		window_maybe_destroy(window);
-	}
+	wl_list_for_each_safe(window, window_tmp, &wm.windows, link) { window_maybe_destroy(window); }
 	Seat *seat, *seat_tmp;
-	wl_list_for_each_safe(seat, seat_tmp, &wm.seats, link)
-	{
-		seat_maybe_destroy(seat);
-	}
+	wl_list_for_each_safe(seat, seat_tmp, &wm.seats, link) { seat_maybe_destroy(seat); }
 
 	// Carry out window management policy
 	wl_list_for_each(window, &wm.windows, link) { window_manage(window); }
@@ -653,7 +564,7 @@ static void window_manager_handle_seat(void *data, struct river_window_manager_v
 static void window_manager_handle_session_locked(void *data, struct river_window_manager_v1 *obj) {}
 static void window_manager_handle_session_unlocked(void *data, struct river_window_manager_v1 *obj) {}
 
-static const struct river_window_manager_v1_listener window_managerm_listener = {
+static const struct river_window_manager_v1_listener window_manager_listener = {
 	.unavailable = window_manager_handle_unavailable,
 	.finished = window_manager_handle_finished,
 	.manage_start = window_manager_handle_manage_start,
@@ -676,12 +587,10 @@ static void handle_global(void *data, struct wl_registry *registry, uint32_t nam
 {
 	if (strcmp(interface, river_window_manager_v1_interface.name) == 0) {
 		if (version >= 4) {
-			window_manager_v1 = wl_registry_bind(
-				registry, name, &river_window_manager_v1_interface, 4);
+			window_manager_v1 = wl_registry_bind(registry, name, &river_window_manager_v1_interface, 4);
 		}
 	} else if (strcmp(interface, river_xkb_bindings_v1_interface.name) == 0) {
-		xkb_bindings_v1 =
-			wl_registry_bind(registry, name, &river_xkb_bindings_v1_interface, 1);
+		xkb_bindings_v1 = wl_registry_bind(registry, name, &river_xkb_bindings_v1_interface, 1);
 	}
 }
 
@@ -697,7 +606,7 @@ int main(void)
 	struct wl_display *display = wl_display_connect(NULL);
 	if (display == NULL) {
 		fputs("failed to connect to Wayland server", stderr);
-		return 1;
+		return EXIT_FAILURE;
 	}
 
 	// Avoid passing WAYLAND_DEBUG on to our children.
@@ -711,24 +620,25 @@ int main(void)
 	wl_registry_add_listener(registry, &registry_listener, NULL);
 	if (wl_display_roundtrip(display) < 0) {
 		fputs("roundtrip failed", stderr);
-		return 1;
+		return EXIT_FAILURE;
 	}
 
 	if (window_manager_v1 == NULL || xkb_bindings_v1 == NULL) {
 		fputs("river_window_manager_v1 or river_xkb_bindings_v1 not supported by the Wayland server", stderr);
-		return 1;
+		return EXIT_FAILURE;
 	}
 
 	window_manager_init();
+	config_init();
 
-	river_window_manager_v1_add_listener(window_manager_v1, &window_managerm_listener, NULL);
+	river_window_manager_v1_add_listener(window_manager_v1, &window_manager_listener, NULL);
 
 	while (true) {
 		if (wl_display_dispatch(display) < 0) {
 			fputs("dispatch failed", stderr);
-			return 1;
+			return EXIT_FAILURE;
 		}
 	}
 
-	return 0;
+	return EXIT_SUCCESS;
 }
