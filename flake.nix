@@ -22,6 +22,7 @@
             wayland-scanner
             libxkbcommon
             river
+            lua5_5
           ];
         };
       }

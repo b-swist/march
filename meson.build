@@ -1,6 +1,3 @@
-# SPDX-FileCopyrightText: © 2026 Isaac Freund
-# SPDX-License-Identifier: 0BSD
-
 project(
   'march',
   'c',
@@ -14,12 +11,13 @@ project(
 
 cc = meson.get_compiler('c')
 add_project_arguments(cc.get_supported_arguments([
-	'-D_POSIX_C_SOURCE=200809L',
-	'-Wno-unused-parameter',
+  '-D_POSIX_C_SOURCE=200809L',
+  '-Wno-unused-parameter',
 ]), language: 'c')
 
 wayland_client = dependency('wayland-client')
 xkbcommon = dependency('xkbcommon')
+lua = dependency('lua', version: '>= 5.5')
 
 wl_mod = import('wayland')
 generated = wl_mod.scan_xml(
@@ -27,13 +25,18 @@ generated = wl_mod.scan_xml(
   'protocol/river-xkb-bindings-v1.xml',
 )
 
+sources = [
+  'march.c',
+]
+
 exe = executable(
   'march',
-  'march.c',
+  sources,
   generated,
   dependencies: [
     wayland_client,
     xkbcommon,
+    lua,
   ],
   install: true,
 )
